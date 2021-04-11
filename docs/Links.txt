@@ -1,0 +1,21 @@
+Vulkan Registry
+https://www.khronos.org/registry/vulkan/
+
+Vulkan Headers Github
+https://github.com/KhronosGroup/Vulkan-Headers
+
+https://github.com/KhronosGroup/Vulkan-Guide
+
+The Last Markdown Editor, Ever
+https://dillinger.io
+
+Corrector
+https://www.corrector.co
+
+Clang Format Configurator
+https://zed0.co.uk/clang-format-configurator/
+
+https://vulkan-tutorial.com/en/Drawing_a_triangle/Setup/Instance
+
+https://github.com/GameTechDev/IntroductionToVulkan
+https://software.intel.com/content/www/us/en/develop/articles/api-without-secrets-introduction-to-vulkan-part-1.html
