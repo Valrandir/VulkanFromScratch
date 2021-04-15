@@ -18,12 +18,17 @@ __declspec(noreturn) void Win32Abort(LPCTSTR message);
 __declspec(noreturn) void VkAbort(VkResult result, LPCTSTR fn);
 
 #ifdef NDEBUG
-#define TRY(fn) fn
-#define VK_TRY(fn) fn
+#define ASSERT(fn) fn
+#define WIN32_ASSERT(fn) fn
+#define VK_ASSERT(fn) fn
 #else
 #define ASSERT(fn) \
 	if(!(fn)) \
 	Abort(TEXT(#fn))
+
+#define WIN32_ASSERT(fn) \
+	if(!(fn)) \
+	Win32Abort(TEXT(#fn))
 
 #define VK_ASSERT(fn) \
 	{ \
@@ -82,6 +87,58 @@ __declspec(noreturn) void VkAbort(VkResult result, LPCTSTR message)
 }
 #include <vector>
 
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	if(msg == WM_CLOSE)
+		PostQuitMessage(0);
+
+	return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+struct Window {
+	HINSTANCE hInstance;
+	HWND hWnd;
+	int width, height;
+};
+
+Window CreateWnd(int width, int height)
+{
+	LPCTSTR CLASS_NAME = TEXT("OneFileVulkan");
+	HINSTANCE hInstance = GetModuleHandle(NULL);
+	WNDCLASS wc{sizeof(wc)};
+
+	if(!GetClassInfo(hInstance, TEXT(""), &wc)) {
+		wc.lpfnWndProc = WndProc;
+		wc.hInstance = hInstance;
+		wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+		wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+		wc.hbrBackground = (HBRUSH)(COLOR_BACKGROUND + 1);
+		wc.lpszClassName = CLASS_NAME;
+		WIN32_ASSERT(RegisterClass(&wc));
+	}
+
+	DWORD style = WS_BORDER | WS_CAPTION | WS_POPUP | WS_SYSMENU | WS_VISIBLE;
+	RECT rect{0, 0, width, height};
+	AdjustWindowRect(&rect, style, FALSE);
+
+	int w = rect.right - rect.left;
+	int h = rect.bottom - rect.top;
+	int x = (GetSystemMetrics(SM_CXSCREEN) - w) >> 1;
+	int y = (GetSystemMetrics(SM_CYSCREEN) - h) >> 1;
+	HWND hWnd;
+	WIN32_ASSERT(hWnd = CreateWindow(CLASS_NAME, CLASS_NAME, style, x, y, w, h, HWND_DESKTOP, FALSE, hInstance, NULL));
+
+	return {hInstance, hWnd, width, height};
+}
+
+void WndLoop()
+{
+	MSG msg;
+
+	while(GetMessage(&msg, 0, 0, 0))
+		DispatchMessage(&msg);
+}
+
 void VulkanPeek()
 {
 	HMODULE vulkan = LoadLibrary(TEXT("vulkan-1.dll"));
@@ -89,7 +146,19 @@ void VulkanPeek()
 		return;
 
 	VK_LOAD_FROM_MODULE(vulkan, vkGetInstanceProcAddr);
+	VK_LOAD_FROM_VULKAN(vkEnumerateInstanceExtensionProperties);
 	VK_LOAD_FROM_VULKAN(vkCreateInstance);
+
+	//Check available extensions
+	uint32_t propertyCount;
+	VK_ASSERT(vkEnumerateInstanceExtensionProperties(nullptr, &propertyCount, nullptr));
+	ASSERT(propertyCount > 0);
+	std::vector<VkExtensionProperties> properties(propertyCount);
+	VK_ASSERT(vkEnumerateInstanceExtensionProperties(nullptr, &propertyCount, &properties.front()));
+	std::vector<const char*> desiredExtensions = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+	auto checkExtension = [&](const char* extensionName) -> bool { return properties.cend() != std::find_if(properties.cbegin(), properties.cend(), [&](auto& p) -> bool { return strcmp(extensionName, p.extensionName) == 0; }); };
+	for(auto& de : desiredExtensions)
+		ASSERT(checkExtension(de));
 
 	//Create Vulkan Instance
 	VkApplicationInfo ai{};
@@ -102,6 +171,10 @@ void VulkanPeek()
 	VkInstanceCreateInfo ci{};
 	ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 	ci.pApplicationInfo = &ai;
+	uint32_t enabledExtensionCount;
+	const char* const* ppEnabledExtensionNames;
+	ci.enabledExtensionCount = desiredExtensions.size();
+	ci.ppEnabledExtensionNames = &desiredExtensions.front();
 	VkInstance instance;
 	VK_ASSERT(vkCreateInstance(&ci, nullptr, &instance));
 	ASSERT(instance);
@@ -143,8 +216,8 @@ void VulkanPeek()
 	std::vector<VkQueueFamilyProperties2> queueFamilyProperties(queueFamilyPropertyCount, {VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2, nullptr});
 	vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueFamilyPropertyCount, &queueFamilyProperties.front());
 	auto qfpIsOk = [](const auto& qfp) { return qfp.queueFamilyProperties.queueCount > 0 && qfp.queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT; };
-	auto it = std::find_if(queueFamilyProperties.begin(), queueFamilyProperties.end(), qfpIsOk);
-	ASSERT(it != queueFamilyProperties.end() && "Found no queue with VK_QUEUE_GRAPHICS_BIT");
+	auto it = std::find_if(queueFamilyProperties.cbegin(), queueFamilyProperties.cend(), qfpIsOk);
+	ASSERT(it != queueFamilyProperties.cend() && "Found no queue with VK_QUEUE_GRAPHICS_BIT");
 	VkQueueFamilyProperties2 queueFamilyProperty = *it;
 	int queueFamilyIndex = it - queueFamilyProperties.begin();
 	queueFamilyProperties.resize(0);
@@ -167,6 +240,18 @@ void VulkanPeek()
 	VK_LOAD_FROM_VULKAN_DEVICE(logicalDevice, vkDestroyDevice);
 	vkGetDeviceQueue(logicalDevice, queueFamilyIndex, 0, &deviceQueue);
 	ASSERT(deviceQueue);
+
+	//Create a win32 window
+	auto wnd = CreateWnd(640, 480);
+
+	//Create a win32 surface
+	VK_LOAD_FROM_VULKAN_INSTANCE(instance, vkCreateWin32SurfaceKHR);
+	VkWin32SurfaceCreateInfoKHR sci = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+	sci.hinstance = wnd.hInstance;
+	sci.hwnd = wnd.hWnd;
+	VkSurfaceKHR surface;
+	VK_ASSERT(vkCreateWin32SurfaceKHR(instance, &sci, nullptr, &surface));
+	ASSERT(surface);
 
 	//Destroy
 	VK_ASSERT(vkDeviceWaitIdle(logicalDevice));
