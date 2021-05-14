@@ -6,8 +6,8 @@
 #include "vulkan.h"
 
 #include <iostream>
-#include <vector>
 #include <tchar.h>
+#include <vector>
 
 #ifdef UNICODE
 #define TCERR std::wcerr
@@ -192,7 +192,7 @@ void OneFileVulkan()
 		std::vector<VkExtensionProperties> properties(propertyCount);
 		VK_ASSERT(vkEnumerateInstanceExtensionProperties(nullptr, &propertyCount, &properties.front()));
 		auto checkExtension = [&](const char* extensionName) -> bool { return properties.cend() != std::find_if(properties.cbegin(), properties.cend(), [&](auto& p) -> bool { return strcmp(extensionName, p.extensionName) == 0; }); };
-		for (auto& de : instanceExtensions) {
+		for(auto& de : instanceExtensions) {
 			auto extensionPresent = checkExtension(de);
 			ASSERT(extensionPresent);
 		}
@@ -417,9 +417,9 @@ void OneFileVulkan()
 	VK_LOAD_FROM_VULKAN_DEVICE(device, vkCmdPipelineBarrier);
 	VK_LOAD_FROM_VULKAN_DEVICE(device, vkCmdClearColorImage);
 	VK_LOAD_FROM_VULKAN_DEVICE(device, vkEndCommandBuffer);
-	{
-		VkCommandBufferBeginInfo commandBufferBeginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT, nullptr};
-		VkClearColorValue clearColorValue = {{0.2f, 0.5f, 0.8f, 0.0f}};
+	auto recordCommandBuffer = [&](float red, float green, float blue) {
+		VkCommandBufferBeginInfo commandBufferBeginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, nullptr};
+		VkClearColorValue clearColorValue = {{red, green, blue, 0.0f}};
 		VkImageSubresourceRange imageSubresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 		VkImageMemoryBarrier barrierFromPresentToClear = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, presentQueueFamilyIndex, presentQueueFamilyIndex, 0, imageSubresourceRange};
 		VkImageMemoryBarrier barrierFromClearToPresent = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, presentQueueFamilyIndex, presentQueueFamilyIndex, 0, imageSubresourceRange};
@@ -433,7 +433,7 @@ void OneFileVulkan()
 			vkCmdPipelineBarrier(presentQueueCommandBuffers[i], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierFromClearToPresent);
 			VK_ASSERT(vkEndCommandBuffer(presentQueueCommandBuffers[i]));
 		}
-	}
+	};
 
 	//Loop Window
 	VK_LOAD_FROM_VULKAN_DEVICE(device, vkAcquireNextImageKHR);
@@ -445,8 +445,19 @@ void OneFileVulkan()
 	int fps = 0;
 	auto tick_prev = GetTick();
 
+	//Color changing over frames
+	struct ColorCycle {
+		float c, cv;
+	} cv[3] = {{0.2f, 0.008f}, {0.5f, 0.01f}, {0.8f, 0.012f}};
+
 	WndShow(wnd);
 	while(WndLoop()) {
+		//Color changing over frames
+		auto cu = [](float& c, float& cv) -> float { c += cv; if(c < 0.0f) { c = 0.0f; cv = -cv; } if(c > 1.0f) { c = 1.0f; cv = -cv; } return cv; };
+		for(auto& it : cv)
+			cu(it.c, it.cv);
+		recordCommandBuffer(cv[0].c, cv[1].c, cv[2].c);
+
 		//Acquire image from swap chain
 		uint32_t imageIndex;
 		VkResult vkAcquireNextImageResult = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
@@ -468,18 +479,21 @@ void OneFileVulkan()
 
 		//Calculate FPS
 		++fps_accum;
-		auto now = GetTick();
-		auto tick = now - tick_prev;
-		if(tick >= 1000) {
-			tick_prev = now;
- 			fps = fps_accum;
-			fps_accum = 0;
+		{
+			auto now = GetTick();
+			auto tick = now - tick_prev;
+			if(tick >= 1000) {
+				tick_prev = now;
+				fps = fps_accum;
+				fps_accum = 0;
+			}
 		}
 
 		//Show FPS
 		{
-			TCHAR buffer[64];
-			auto cchText = _stprintf_s(buffer, 64, TEXT(APPLICATION_NAME " - FPS: %d"), fps);
+			const size_t BUFFER_SIZE = sizeof(TEXT(APPLICATION_NAME)) + 64;
+			TCHAR buffer[BUFFER_SIZE];
+			auto cchText = _stprintf_s(buffer, BUFFER_SIZE, TEXT(APPLICATION_NAME " - FPS: %d"), fps);
 			ASSERT(cchText != -1);
 			SetWindowText(wnd.hWnd, buffer);
 		}
